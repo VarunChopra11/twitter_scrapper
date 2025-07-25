@@ -485,6 +485,16 @@ async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "keywords": KEYWORDS}
 
+# ✅ Add a GET /wakeup route for UptimeRobot
+@app.get("/wakeup")
+async def wakeup():
+    return {"status": "awake", "message": "This proxy server is awake."}
+
+# ✅ Add a HEAD /wakeup route for UptimeRobot HEAD checks
+@app.head("/wakeup")
+async def wakeup_head():
+    return
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
