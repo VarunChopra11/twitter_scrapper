@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-dotenv
+textblob
+selenium
+webdriver-manager
+apscheduler
+asyncpg
+pydantic
+pandas
+apscheduler 
+pymongo
