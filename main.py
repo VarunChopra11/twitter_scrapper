@@ -62,7 +62,7 @@ async def lifespan(app: FastAPI):
     scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
     scheduler.add_job(
         run_analytics_and_store,
-        CronTrigger(hour=8, minute=5),  # 08:05 AM IST
+        CronTrigger(hour=23, minute=24),  # 08:05 AM IST
         name="daily_analytics"
     )
     scheduler.start()
