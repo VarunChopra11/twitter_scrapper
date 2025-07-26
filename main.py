@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from typing import List, Dict, Any
@@ -10,8 +11,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
+import traceback
 
-# Import the Twitter scraper components
 from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import (
@@ -24,16 +25,20 @@ from selenium.webdriver.firefox.service import Service as FirefoxService
 from webdriver_manager.firefox import GeckoDriverManager
 from time import sleep
 
-# Load environment variables
+# -------------------- NEW: Logging setup --------------------
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+# ------------------------------------------------------------
+
 load_dotenv()
 
 KEYWORDS = [
-    "Ethereum", "ETH", "Bitcoin", "BTC", "SOL", "Bored Ape", "BAYC", "Polygon", "Chainlink", "LINK", "Shiba Inu", "SHIB", "Uniswap", "UNI"
+    "Ethereum", "ETH", "Bitcoin", "BTC", "SOL", "Bored Ape", "BAYC",
+    "Polygon", "Chainlink", "LINK", "Shiba Inu", "SHIB", "Uniswap", "UNI"
 ]
 
-# Twitter credentials
 TWITTER_MAIL = os.getenv("TWITTER_MAIL")
-TWITTER_USERNAME = os.getenv("TWITTER_USERNAME") 
+TWITTER_USERNAME = os.getenv("TWITTER_USERNAME")
 TWITTER_PASSWORD = os.getenv("TWITTER_PASSWORD")
 HEADLESS_MODE = os.getenv("HEADLESS", "yes")
 MONGO_URI = os.getenv("MONGO_URI")
@@ -42,38 +47,34 @@ COLLECTION_NAME = os.getenv("COLLECTION_NAME", "analytics_data")
 
 TWITTER_LOGIN_URL = "https://twitter.com/i/flow/login"
 
-# MongoDB client setup
 client = pymongo.MongoClient(MONGO_URI)
 db = client[DB_NAME]
 collection = db[COLLECTION_NAME]
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Download TextBlob corpora if needed
     try:
-        print("Checking TextBlob corpora...")
+        logger.info("Checking TextBlob corpora...")
         from textblob.download_corpora import download_all
         download_all()
-        print("TextBlob corpora downloaded")
+        logger.info("TextBlob corpora downloaded")
     except Exception as e:
-        print(f"Error downloading corpora: {e}")
-    
-    # Setup scheduler
+        logger.error(f"Error downloading corpora: {e}")
+
     scheduler = BackgroundScheduler(timezone="Asia/Kolkata")
     scheduler.add_job(
         run_analytics_and_store,
-        CronTrigger(hour=23, minute=24),  # 08:05 AM IST
+        CronTrigger(hour=8, minute=5),
         name="daily_analytics"
     )
     scheduler.start()
-    print("Scheduler started - will run daily at  08:05 PM IST")
-    
+    logger.info("Scheduler started - will run daily at 08:05 AM IST")
+
     yield
-    
-    # Cleanup
+
     client.close()
     scheduler.shutdown()
-    print("MongoDB connection closed and scheduler shutdown")
+    logger.info("MongoDB connection closed and scheduler shutdown")
 
 app = FastAPI(lifespan=lifespan)
 
@@ -86,14 +87,11 @@ class TwitterScraperForAnalytics:
         self.driver = None
         self.actions = None
         self.tweet_data = []
-        
+
     def _get_driver(self):
-        """Setup Firefox WebDriver"""
-        print("Setup WebDriver...")
-        
-        # User agent of an Android smartphone device
+        logger.info("Setup WebDriver...")
         header = "Mozilla/5.0 (Linux; Android 11; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.5414.87 Mobile Safari/537.36"
-        
+
         browser_option = FirefoxOptions()
         browser_option.add_argument("--no-sandbox")
         browser_option.add_argument("--disable-dev-shm-usage")
@@ -102,73 +100,69 @@ class TwitterScraperForAnalytics:
         browser_option.add_argument("--log-level=3")
         browser_option.add_argument("--disable-notifications")
         browser_option.add_argument("--disable-popup-blocking")
-        browser_option.add_argument("--user-agent={}".format(header))
-        
-        # Option to hide browser or not
+        browser_option.add_argument(f"--user-agent={header}")
+
         if self.headless_state == 'yes':
             browser_option.add_argument("--headless")
-        
+
         try:
-            print("Initializing FirefoxDriver...")
+            logger.info("Initializing FirefoxDriver...")
             driver = webdriver.Firefox(options=browser_option)
-            print("WebDriver Setup Complete")
+            logger.info("WebDriver Setup Complete")
             return driver
         except WebDriverException:
             try:
-                print("Downloading FirefoxDriver...")
+                logger.info("Downloading FirefoxDriver...")
                 firefoxdriver_path = GeckoDriverManager().install()
                 firefox_service = FirefoxService(executable_path=firefoxdriver_path)
-                
-                print("Initializing FirefoxDriver...")
+                logger.info("Initializing FirefoxDriver...")
                 driver = webdriver.Firefox(
                     service=firefox_service,
                     options=browser_option,
                 )
-                print("WebDriver Setup Complete")
+                logger.info("WebDriver Setup Complete")
                 return driver
             except Exception as e:
-                print(f"Error setting up WebDriver: {e}")
+                logger.error(f"Error setting up WebDriver: {e}")
                 raise e
 
     def login(self):
-        """Login to Twitter"""
-        print("Logging in to Twitter...")
-        
+        logger.info("Logging in to Twitter...")
+
         try:
             self.driver = self._get_driver()
             self.actions = ActionChains(self.driver)
-            
+
             self.driver.maximize_window()
             self.driver.execute_script("document.body.style.zoom='150%'")
             self.driver.get(TWITTER_LOGIN_URL)
             sleep(3)
-            
+
             self._input_username()
             self._input_unusual_activity()
             self._input_password()
-            
+
             cookies = self.driver.get_cookies()
             auth_token = None
-            
+
             for cookie in cookies:
                 if cookie["name"] == "auth_token":
                     auth_token = cookie["value"]
                     break
-            
+
             if auth_token is None:
                 raise ValueError("Login failed - no auth token found")
-            
-            print("Login Successful")
+
+            logger.info("Login Successful")
             return True
-            
+
         except Exception as e:
-            print(f"Login Failed: {e}")
+            logger.error(f"Login Failed: {e}")
             if self.driver:
                 self.driver.quit()
             raise e
 
     def _input_username(self):
-        """Input username during login"""
         input_attempt = 0
         while True:
             try:
@@ -182,11 +176,10 @@ class TwitterScraperForAnalytics:
                 if input_attempt >= 3:
                     raise Exception("Failed to input username after 3 attempts")
                 else:
-                    print("Re-attempting to input username...")
+                    logger.warning("Re-attempting to input username...")
                     sleep(2)
 
     def _input_unusual_activity(self):
-        """Handle unusual activity check if it appears"""
         input_attempt = 0
         while True:
             try:
@@ -201,7 +194,6 @@ class TwitterScraperForAnalytics:
                     break
 
     def _input_password(self):
-        """Input password during login"""
         input_attempt = 0
         while True:
             try:
@@ -215,146 +207,127 @@ class TwitterScraperForAnalytics:
                 if input_attempt >= 3:
                     raise Exception("Failed to input password after 3 attempts")
                 else:
-                    print("Re-attempting to input password...")
+                    logger.warning("Re-attempting to input password...")
                     sleep(2)
 
     def scrape_keyword_tweets(self, keyword: str, max_tweets: int = 20) -> List[Dict[str, Any]]:
-        """Scrape tweets for a specific keyword"""
-        print(f"Scraping tweets for keyword: {keyword}")
-        
-        # Calculate date range (last 3 days)
+        logger.info(f"Scraping tweets for keyword: {keyword}")
+
         today = date.today()
         three_days_ago = today - timedelta(days=3)
-        
-        # Navigate to search
+
         search_query = f"{keyword} since:{three_days_ago} until:{today}"
         search_url = f"https://twitter.com/search?q={search_query.replace(' ', '%20')}&src=typed_query&f=live"
-        
-        print(f"Navigating to: {search_url}")
+
+        logger.info(f"Navigating to: {search_url}")
         self.driver.get(search_url)
         sleep(5)
-        
-        # Accept cookies if banner appears
+
         try:
             accept_cookies_btn = self.driver.find_element("xpath", "//span[text()='Refuse non-essential cookies']/../../..")
             accept_cookies_btn.click()
             sleep(2)
         except NoSuchElementException:
             pass
-        
+
         tweets_data = []
         tweet_ids = set()
         scroll_attempts = 0
         max_scroll_attempts = 10
-        
+
         while len(tweets_data) < max_tweets and scroll_attempts < max_scroll_attempts:
             try:
-                # Get tweet cards
                 tweet_cards = self.driver.find_elements("xpath", '//article[@data-testid="tweet" and not(@disabled)]')
-                
                 added_tweets = 0
                 for card in tweet_cards:
                     if len(tweets_data) >= max_tweets:
                         break
-                        
+
                     try:
                         tweet_id = str(card)
                         if tweet_id in tweet_ids:
                             continue
-                        
+
                         tweet_ids.add(tweet_id)
-                        
-                        # Extract tweet data
+
                         tweet_data = self._extract_tweet_data(card)
                         if tweet_data and not tweet_data.get('is_ad', False):
                             tweets_data.append(tweet_data)
                             added_tweets += 1
-                            print(f"Extracted tweet {len(tweets_data)}/{max_tweets}")
-                            
+                            logger.info(f"Extracted tweet {len(tweets_data)}/{max_tweets}")
+
                     except Exception as e:
-                        print(f"Error extracting tweet: {e}")
+                        logger.error(f"Error extracting tweet: {e}")
                         continue
-                
+
                 if added_tweets == 0:
                     scroll_attempts += 1
-                    print(f"No new tweets found, scroll attempt {scroll_attempts}")
-                    
-                    # Try to click retry button if it exists
+                    logger.warning(f"No new tweets found, scroll attempt {scroll_attempts}")
+
                     try:
                         retry_button = self.driver.find_element("xpath", "//span[text()='Retry']/../../..")
                         retry_button.click()
                         sleep(3)
                     except NoSuchElementException:
                         pass
-                    
-                    # Scroll down
+
                     self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
                     sleep(3)
                 else:
                     scroll_attempts = 0
-                    
+
             except Exception as e:
-                print(f"Error during scraping: {e}")
+                logger.error(f"Error during scraping: {e}")
                 scroll_attempts += 1
                 continue
-        
-        print(f"Scraped {len(tweets_data)} tweets for {keyword}")
+
+        logger.info(f"Scraped {len(tweets_data)} tweets for {keyword}")
         return tweets_data
 
     def _extract_tweet_data(self, card) -> Dict[str, Any]:
-        """Extract data from a tweet card"""
         try:
-            # Check if it's an ad
             try:
                 card.find_element("xpath", ".//time")
                 is_ad = False
             except NoSuchElementException:
                 is_ad = True
-                
+
             if is_ad:
                 return {"is_ad": True}
-            
-            # Extract user handle
+
             user_handle = ""
             try:
                 user_handle = card.find_element("xpath", './/span[contains(text(), "@")]').text
             except NoSuchElementException:
                 user_handle = "unknown"
-            
-            # Extract content
+
             content = ""
             try:
                 content_elements = card.find_elements("xpath", '(.//div[@data-testid="tweetText"])[1]/span | (.//div[@data-testid="tweetText"])[1]/a')
                 content = "".join([elem.text for elem in content_elements])
             except NoSuchElementException:
                 content = ""
-            
-            # Extract engagement metrics
-            replies = 0
-            retweets = 0
-            likes = 0
-            
+
+            replies = retweets = likes = 0
+
             try:
                 reply_element = card.find_element("xpath", './/button[@data-testid="reply"]//span')
-                reply_text = reply_element.text.strip()
-                replies = int(reply_text.replace(",", "")) if reply_text.isdigit() else 0
+                replies = int(reply_element.text.strip().replace(",", "")) if reply_element.text.strip().isdigit() else 0
             except (NoSuchElementException, ValueError):
                 replies = 0
-            
+
             try:
                 retweet_element = card.find_element("xpath", './/button[@data-testid="retweet"]//span')
-                retweet_text = retweet_element.text.strip()
-                retweets = int(retweet_text.replace(",", "")) if retweet_text.isdigit() else 0
+                retweets = int(retweet_element.text.strip().replace(",", "")) if retweet_element.text.strip().isdigit() else 0
             except (NoSuchElementException, ValueError):
                 retweets = 0
-            
+
             try:
                 like_element = card.find_element("xpath", './/button[@data-testid="like"]//span')
-                like_text = like_element.text.strip()
-                likes = int(like_text.replace(",", "")) if like_text.isdigit() else 0
+                likes = int(like_element.text.strip().replace(",", "")) if like_element.text.strip().isdigit() else 0
             except (NoSuchElementException, ValueError):
                 likes = 0
-            
+
             return {
                 "content": content,
                 "user_handle": user_handle,
@@ -365,26 +338,21 @@ class TwitterScraperForAnalytics:
                 },
                 "is_ad": False
             }
-            
+
         except Exception as e:
-            print(f"Error extracting tweet data: {e}")
+            logger.error(f"Error extracting tweet data: {e}")
             return None
 
     def close(self):
-        """Close the browser"""
         if self.driver:
             self.driver.quit()
 
 
-def get_keyword_data(keyword: str) -> Dict[str, Any]:
+def get_keyword_data(keyword: str, scraper: TwitterScraperForAnalytics) -> Dict[str, Any]:
     """Get tweet data for a specific keyword and perform sentiment analysis"""
     try:
-        # Initialize scraper
-        scraper = TwitterScraperForAnalytics(TWITTER_MAIL, TWITTER_USERNAME, TWITTER_PASSWORD, HEADLESS_MODE)
-        scraper.login()
-        
         # Scrape tweets
-        tweets = scraper.scrape_keyword_tweets(keyword, max_tweets=50)
+        tweets = scraper.scrape_keyword_tweets(keyword, max_tweets=20)
         
         # Perform sentiment analysis
         sentiments = []
@@ -399,9 +367,6 @@ def get_keyword_data(keyword: str) -> Dict[str, Any]:
         negative_count = sum(1 for s in sentiments if s < -0.2)
         neutral_count = len(sentiments) - positive_count - negative_count
         
-        # Close browser
-        scraper.close()
-        
         return {
             "keyword": keyword,
             "tweet_count": len(tweets),
@@ -413,35 +378,75 @@ def get_keyword_data(keyword: str) -> Dict[str, Any]:
             }
         }
     except Exception as e:
-        print(f"Error analyzing {keyword}: {str(e)}")
+        logger.info(f"Error analyzing {keyword}: {str(e)}")
         return {"keyword": keyword, "error": str(e)}
 
 def run_analytics_and_store():
-    """Run analytics and store results in MongoDB"""
-    print("Running scheduled analytics job...")
+    """Run analytics and store results incrementally in MongoDB"""
+    logger.info("Running scheduled analytics job...")
     
     if not all([TWITTER_MAIL, TWITTER_USERNAME, TWITTER_PASSWORD]):
-        print("Twitter credentials not configured. Skipping scheduled job.")
+        logger.warning("Twitter credentials not configured. Skipping scheduled job.")
         return
     
+    scraper = None
     try:
-        results = []
-        for keyword in KEYWORDS:
-            print(f"Processing keyword: {keyword}")
-            result = get_keyword_data(keyword)
-            results.append(result)
+        # Initialize scraper
+        scraper = TwitterScraperForAnalytics(TWITTER_MAIL, TWITTER_USERNAME, TWITTER_PASSWORD, HEADLESS_MODE)
+        scraper.login()
         
-        document = {
-            "timestamp": pd.Timestamp.now().isoformat(),
-            "data": results
+        # Create initial document
+        timestamp = pd.Timestamp.now().isoformat()
+        base_document = {
+            "timestamp": timestamp,
+            "status": "in_progress",
+            "data": []
         }
+        result = collection.insert_one(base_document)
+        document_id = result.inserted_id
         
-        # Insert into MongoDB
-        collection.insert_one(document)
-        print(f"Inserted analytics data at {document['timestamp']}")
+        # Process each keyword sequentially
+        for keyword in KEYWORDS:
+            try:
+                logger.info(f"Processing keyword: {keyword}")
+                result = get_keyword_data(keyword, scraper)
+                
+                # Update document with new keyword data
+                collection.update_one(
+                    {"_id": document_id},
+                    {"$push": {"data": result}}
+                )
+                logger.info(f"Stored data for {keyword}")
+
+            except Exception as e:
+                error_msg = f"Failed to process {keyword}: {str(e)}"
+                logger.error(error_msg)
+                # Store error for this keyword
+                collection.update_one(
+                    {"_id": document_id},
+                    {"$push": {"data": {"keyword": keyword, "error": error_msg}}}
+                )
         
+        # Mark as completed
+        collection.update_one(
+            {"_id": document_id},
+            {"$set": {"status": "completed"}}
+        )
+        logger.info(f"Completed analytics job at {timestamp}")
+
     except Exception as e:
-        print(f"Error in scheduled job: {str(e)}")
+        logger.error(f"Critical error in analytics job: {str(e)}")
+        traceback.print_exc()
+        
+        # Update document with error if we have document_id
+        if 'document_id' in locals():
+            collection.update_one(
+                {"_id": document_id},
+                {"$set": {"status": "failed", "error": str(e)}}
+            )
+    finally:
+        if scraper:
+            scraper.close()
 
 @app.get("/analytics", response_class=JSONResponse)
 async def get_analytics():
@@ -451,16 +456,30 @@ async def get_analytics():
             "error": "Twitter credentials not configured. Please set environment variables."
         }
     
+    scraper = None
     try:
+        # Initialize scraper
+        scraper = TwitterScraperForAnalytics(TWITTER_MAIL, TWITTER_USERNAME, TWITTER_PASSWORD, HEADLESS_MODE)
+        scraper.login()
+        
         results = []
         for keyword in KEYWORDS:
-            result = get_keyword_data(keyword)
-            results.append(result)
-            
+            try:
+                logger.info(f"Processing keyword: {keyword}")
+                result = get_keyword_data(keyword, scraper)
+                results.append(result)
+            except Exception as e:
+                error_msg = f"Failed to process {keyword}: {str(e)}"
+                logger.error(error_msg)
+                results.append({"keyword": keyword, "error": error_msg})
+        
         return results
         
     except Exception as e:
         return {"error": f"Failed to get analytics: {str(e)}"}
+    finally:
+        if scraper:
+            scraper.close()
 
 @app.get("/last-analytics", response_class=JSONResponse)
 async def get_last_analytics():
@@ -473,7 +492,7 @@ async def get_last_analytics():
         if not last_entry:
             return {"error": "No analytics data found"}
         
-        # Remove MongoDB ID
+        # Remove MongoDB ID and return
         last_entry.pop("_id", None)
         return last_entry
         
@@ -485,16 +504,14 @@ async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "keywords": KEYWORDS}
 
-# ✅ Add a GET /wakeup route for UptimeRobot
 @app.get("/wakeup")
 async def wakeup():
     return {"status": "awake", "message": "This proxy server is awake."}
 
-# ✅ Add a HEAD /wakeup route for UptimeRobot HEAD checks
 @app.head("/wakeup")
 async def wakeup_head():
     return
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="localhost", port=8000)
